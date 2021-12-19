@@ -51,12 +51,12 @@ class CustomTrainer(Trainer):
         inputs_backup = inputs.copy()
         labels = inputs_backup.pop("labels")
         outputs = model(**inputs_backup)
-        logits = outputs[0]
+        logits = outputs[0].cuda()
 
         # Convert labels tensor from float to long as required by CrossEntropyLoss
         labels_long = labels.type(torch.LongTensor).cuda() if torch.cuda.is_available() \
-            else labels.type(torch.LongTensor)
-
+             else labels.type(torch.LongTensor)
+        #labels_long = labels.type(torch.LongTensor)
         # Check if loss function has already been defined, otherwise define it
         try:
             # Compute loss
@@ -66,7 +66,8 @@ class CustomTrainer(Trainer):
             # Compute class weights inversely proportional to size so as to render weights for larger classes small
             class_weights = FloatTensor(len(y) / (len(set(y)) * np.bincount(y)))
             self.loss_function = CrossEntropyLoss(weight=class_weights).cuda() if torch.cuda.is_available() \
-                else CrossEntropyLoss(weight=class_weights)
+                 else CrossEntropyLoss(weight=class_weights)
+            #self.loss_function = CrossEntropyLoss(weight=class_weights)
             loss = self.loss_function(logits, labels_long)
 
         return (loss, outputs) if return_outputs else loss
@@ -153,6 +154,7 @@ def prep_data_pair(
                                                                           test_data.description_2.notna(), "title_2"] + ' ' + \
                                                                       test_data.loc[
                                                                           test_data.description_2.notna(), "description_2"]
+
 
     # remove MPN and EAN from titles
     train_data["content_1"] = train_data.apply(

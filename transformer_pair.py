@@ -87,16 +87,25 @@ def run_transformer_pair(input_path: str, setting_keys: List[str] = None):
         # Tokenize the text features
         # Instantiate Tokenizer
         tokenizer = AutoTokenizer.from_pretrained(model)
-
+        train_data = train_data[pd.notnull(train_data['content_1'])]
+        train_data = train_data[pd.notnull(train_data['content_2'])]
+        test_data = test_data[pd.notnull(test_data['content_1'])]
+        test_data = test_data[pd.notnull(test_data['content_2'])]
+        
         # Encode the text features for training (test data is encoded later)
         train_encodings = tokenizer(
             text=train_data.content_1.tolist(), text_pair=train_data.content_2.tolist(),
             add_special_tokens=True, truncation=True, padding=True
         )
 
+        # test_encodings = tokenizer(
+        #     text=test_data.content_1.tolist(), text_pair=test_data.content_2.tolist(),
+        #     add_special_tokens=True, truncation=True, padding=True
+        # )        
+
         # Create Trainset
         train_set = CustomDataset(train_encodings, train_data.label.tolist())
-
+        # test_set = CustomDataset(test_encodings, test_data.label.tolist())
         # Load Transformer Model
         # Set model global to use it inside model_init function
         global model_config
@@ -105,12 +114,14 @@ def run_transformer_pair(input_path: str, setting_keys: List[str] = None):
 
         # Create Trainer Object
         # Use GPU, if available
-        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
+        # torch.cuda.set_device(1)
+        # print(torch.cuda.is_available())
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # Set compute warmup steps
         params['warmup_steps'] = np.ceil(
             len(train_data) / (params['per_device_train_batch_size'] * params['gradient_accumulation_steps']))
-
+        #print(params.get('per_device_train_batch_size'))
+        #print(params.get('per_device_eval_batch_size'))
         # Run hyperparameter tuning, if specified by settings.json
         if run_parameter_search:
             # Set model parameters for tuning with TrainingArguments-object
@@ -118,14 +129,18 @@ def run_transformer_pair(input_path: str, setting_keys: List[str] = None):
                 output_dir=f'./model',
                 overwrite_output_dir=params.get('overwrite_output_dir'),
                 num_train_epochs=params.get('num_train_epochs'),
-                save_total_limit=params.get('save_total_limit'),
+                #save_total_limit=params.get('save_total_limit'),
                 per_device_train_batch_size=params.get('per_device_train_batch_size'),
                 per_device_eval_batch_size=params.get('per_device_eval_batch_size'),
                 gradient_accumulation_steps=params.get('gradient_accumulation_steps'),
                 warmup_steps=params.get('warmup_steps'),
                 weight_decay=params.get('weight_decay'),
-                evaluation_strategy=params.get('evaluation_strategy'),
-                save_strategy = params.get('evaluation_strategy'),
+                save_strategy ="steps",
+                evaluation_strategy="steps",
+                save_steps=10000,
+                #evaluation_strategy="steps",
+                #evaluation_strategy=params.get('evaluation_strategy'),
+                #save_strategy = params.get('evaluation_strategy'),
                 load_best_model_at_end=params.get('load_best_model_at_end'),
                 metric_for_best_model=params.get('metric_for_best_model')
             )
@@ -143,6 +158,8 @@ def run_transformer_pair(input_path: str, setting_keys: List[str] = None):
 
             best_run = tune_hyperparameters(trainer, tokenizer, train_data)
 
+        print('HyperParameter search completed \n')
+        #print(best_run)
         # Create dict to save scores for every run
         scores_per_lang = dict((lang, list()) for lang in test_langs)
         avg_scores_per_lang = dict()
@@ -150,15 +167,19 @@ def run_transformer_pair(input_path: str, setting_keys: List[str] = None):
 
         # Run every Experiment n-times
         for i in range(n_runs):
+            print("inside runs")
             # Change args and reinstantiate trainer for training on whole trainset (no early stopping here)
             # Set new seed for different results in each run
 
             training_args = TrainingArguments(
+                # save_strategy ="steps",
+                # evaluation_strategy="steps",
                 output_dir=f'./model',
                 overwrite_output_dir=params.get('overwrite_output_dir'),
                 num_train_epochs=params.get('num_train_epochs'),
                 learning_rate=params.get('learning_rate'),
-                save_total_limit=params.get('save_total_limit'),
+                save_steps=10000,
+                #save_total_limit=params.get('save_total_limit'),
                 per_device_train_batch_size=params.get('per_device_train_batch_size'),
                 per_device_eval_batch_size=params.get('per_device_eval_batch_size'),
                 gradient_accumulation_steps=params.get('gradient_accumulation_steps'),
@@ -171,6 +192,7 @@ def run_transformer_pair(input_path: str, setting_keys: List[str] = None):
                 model_init=model_init,
                 args=training_args,
                 train_dataset=train_set,
+                #eval_dataset = test_set,
                 compute_metrics=compute_metrics
             )
 
@@ -204,8 +226,9 @@ def run_transformer_pair(input_path: str, setting_keys: List[str] = None):
 
                 # Predict and compute metrics to measure performance of model
                 pred = trainer.predict(test_set_lang)
+                print(pred)
                 pred_cl_id = pred[0].argmax(-1)
-                scores_per_lang[lang].append(pred[2]['eval_f1'])
+                scores_per_lang[lang].append(pred.metrics['test_f1'])
                 results_per_lang[lang].append(pred_cl_id)
 
                 # Output results
@@ -247,11 +270,12 @@ def tune_hyperparameters(trainer, tokenizer, train_data):
     # Hand tuning and validation set to trainer
     setattr(trainer, 'train_dataset', tune_set)
     setattr(trainer, 'eval_dataset', val_set)
-
+    print("Trainer attributes inside hyperparameter search-")
+    print(trainer)
     # Search Parameters
     best_run = trainer.hyperparameter_search(
         hp_space=hp_space,
-        n_trials=5,
+        n_trials=1,
         direction="maximize",
         compute_objective=lambda metrics: metrics['eval_f1']
     )
